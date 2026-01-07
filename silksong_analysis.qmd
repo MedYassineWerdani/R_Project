@@ -33,6 +33,9 @@ No private or personally identifiable information is used.
 library(tidyverse)
 library(lubridate)
 library(tidytext)
+library(viridis)
+library(forcats)
+library(dplyr)
 ```
 
 ## 4. Data Loading
@@ -160,20 +163,20 @@ df_text <- df_en %>%
     review = str_replace_all(review, "[^a-z\\s]", "")
   )
 ```
-## 13. Perceived Difficulty and Player Experience - Detailed 
+## 13. Exploratory Text Analysis
 
 ### Step 1: Preprocessing 
 ```{r}
 
 # Tokenize into words
 df_tokens <- df_text %>%
+  select(review, voted_up) %>%  
   unnest_tokens(word, review) %>%
-  filter(!word %in% stop_words$word)  # remove common English words
-
+  filter(!word %in% stop_words$word)
 
 ```
 
-### Step 2: Count Words in All Reviews
+### Step 2: Most Frequent Words
 Get the most frequent words overall:
 ```{r}
 word_counts <- df_tokens %>%
@@ -182,10 +185,20 @@ word_counts <- df_tokens %>%
 word_counts %>% slice(1:20)  # top 20 words
 ```
 
-#### n-grams 
+## Step 3: Most Frequent Bigrams
 
 ```{r}
-stop_words_list <- stop_words$word
+# Create bigrams
+
+df_bigrams <- df_text %>%
+unnest_tokens(bigram, review, token = "ngrams", n = 2)
+
+
+```
+
+
+```{r}
+  stop_words_list <- stop_words$word
 
   df_bigrams_clean <- df_bigrams %>%
   separate(bigram, into = c("word1", "word2"), sep = " ") %>%
@@ -211,8 +224,9 @@ top_bigrams <- bigram_counts %>%
   filter(!str_detect(bigram, "^([a-z]+) \\1$")) %>%  # remove repeated words
   filter(bigram != "NA NA") %>%
   slice(1:20)
+```
 
-
+```{r}
 # Plot
 ggplot(top_bigrams, aes(x = reorder(bigram, n), y = n)) +
   geom_col(fill = "steelblue") +
@@ -226,5 +240,430 @@ ggplot(top_bigrams, aes(x = reorder(bigram, n), y = n)) +
 
 ```
 
+## Step 4 : Reviews based on recommendation
+
+- Goal: Quickly visualize dominant words in reviews.
+- Bonus: Separate for positive vs. negative recommendations.
+
+### Step 4a: Tokenize into words with voted_up kept
+```{r}
+df_tokens <- df_text %>%
+  select(review, voted_up) %>%   # keep recommendation
+  unnest_tokens(word, review) %>%
+  filter(!word %in% stop_words$word)
+```
+
+### Step 4b: Create bigrams with voted_up
+```{r}
+df_bigrams <- df_text %>%
+  select(review, voted_up) %>%
+  unnest_tokens(bigram, review, token = "ngrams", n = 2)
+
+stop_words_list <- stop_words$word
+
+df_bigrams_clean <- df_bigrams %>%
+  separate(bigram, into = c("word1", "word2"), sep = " ") %>%
+  filter(!word1 %in% stop_words_list,
+         !word2 %in% stop_words_list) %>%
+  unite(bigram, word1, word2, sep = " ")
+```
+
+### Step 4c: Split by positive and negative reviews
+```{r}
+bigrams_pos <- df_bigrams_clean %>%
+  filter(voted_up == TRUE) %>%
+  count(bigram, sort = TRUE) %>%
+  filter(bigram != "NA NA")
+
+bigrams_neg <- df_bigrams_clean %>%
+  filter(voted_up == FALSE) %>%
+  count(bigram, sort = TRUE) %>%
+  filter(bigram != "NA NA")
+
+```
+
+### Step 4d: Plot top 20 positive bigrams
+
+```{r}
+# Add the review ID back (or row number) to track bigrams per review
+df_en <- df_en %>% mutate(review_id = row_number())
+
+# Tokenize bigrams and keep review_id
+df_bigrams <- df_en %>%
+  select(review, review_id, voted_up, playtime_at_review) %>%
+  unnest_tokens(bigram, review, token = "ngrams", n = 2)  %>%
+  filter(bigram != "NA NA")
+
+
+# Remove stop words in bigrams
+stop_words_list <- stop_words$word
+
+df_bigrams_clean <- df_bigrams %>%
+  separate(bigram, into = c("word1", "word2"), sep = " ") %>%
+  filter(!word1 %in% stop_words_list, !word2 %in% stop_words_list) %>%
+  unite(bigram, word1, word2, sep = " ")
+
+# Positive reviews
+bigrams_pos <- df_bigrams_clean %>%
+  filter(voted_up == TRUE)
+
+# Count frequency and compute average playtime per bigram
+top_pos_bigrams <- bigrams_pos %>%
+  group_by(bigram) %>%
+  summarise(
+    freq = n(),
+    avg_playtime = mean(playtime_at_review),
+    .groups = "drop"
+  ) %>%
+  arrange(desc(freq)) %>%
+  slice(1:20)
+
+# Plot
+ggplot(top_pos_bigrams, aes(x = reorder(bigram, freq), y = freq, color = avg_playtime)) +
+  geom_point(size = 5) +
+  coord_flip() +
+  scale_color_viridis_c(option = "C") +
+  labs(
+    title = "Top 20 Bigrams in Positive Reviews with Avg Playtime",
+    x = "Bigram",
+    y = "Frequency",
+    color = "Avg Playtime"
+  ) +
+  theme_minimal(base_size = 14)
+
+```
+
+### Step 4e: Plot top 20 negative bigrams
+
+```{r}
+ggplot(bigrams_neg %>% slice(1:20),
+       aes(x = reorder(bigram, n), y = n)) +
+  geom_point(color = "firebrick", size = 4) +
+  coord_flip() +
+  labs(
+    title = "Top 20 Bigrams in Negative Reviews",
+    x = "Bigram",
+    y = "Frequency"
+  ) +
+  theme_minimal(base_size = 14)
+```
+
+## Step 5: Sentiment Analysis (Exploratory, not verdicts)
+
+### Step 5.1: Attach sentiment to tokens
+```{r}
+# Load sentiment lexicon
+bing_sentiments <- get_sentiments("bing")
+
+df_tokens_sent <- df_tokens %>%
+  inner_join(bing_sentiments, by = "word")
+```
+
+### Step 5.2: Word frequency by sentiment AND review type
+
+```{r}
+sentiment_word_counts <- df_tokens_sent %>%
+  group_by(voted_up, sentiment, word) %>%
+  summarise(n = n(), .groups = "drop")
+
+
+  top_sentiment_words <- sentiment_word_counts %>%
+  group_by(voted_up, sentiment) %>%
+  slice_max(n, n = 15) %>%
+  ungroup()
+
+```
+
+### Step 5.3: Plot — frequency by review type
+
+```{r}
+ggplot(top_sentiment_words,
+       aes(x = reorder(word, n), y = n, fill = sentiment)) +
+  geom_col(show.legend = TRUE) +
+  coord_flip() +
+  facet_wrap(~ voted_up,
+              labeller = as_labeller(c(`TRUE` = "Positive Reviews",
+                                        `FALSE` = "Negative Reviews"))) +
+  labs(
+    title = "Most Frequent Sentiment Words by Review Type",
+    x = "Word",
+    y = "Frequency",
+    fill = "Sentiment"
+  ) +
+  theme_minimal(base_size = 14)
+```
+
+```{r}
+bing <- get_sentiments("bing")
+
+bigrams_separated <- df_bigrams_clean %>%
+  separate(bigram, into = c("word1", "word2"), sep = " ")
+
+bigrams_with_sentiment <- bigrams_separated %>%
+  left_join(bing, by = c("word1" = "word")) %>%
+  rename(sentiment1 = sentiment) %>%
+  left_join(bing, by = c("word2" = "word")) %>%
+  rename(sentiment2 = sentiment)
+
+bigrams_sentiment_final <- bigrams_with_sentiment %>%
+  mutate(
+    sentiment = case_when(
+      sentiment1 == sentiment2 ~ sentiment1,
+      is.na(sentiment1) & !is.na(sentiment2) ~ sentiment2,
+      !is.na(sentiment1) & is.na(sentiment2) ~ sentiment1,
+      TRUE ~ NA_character_
+    ),
+    bigram = paste(word1, word2)
+  ) %>%
+  filter(!is.na(sentiment))
+
+
+
+top_sentiment_bigrams <- bigrams_sentiment_final %>%
+  group_by(voted_up, sentiment, bigram) %>%
+  summarise(n = n(), .groups = "drop") %>%
+  group_by(voted_up, sentiment) %>%
+  slice_max(n, n = 15) %>%
+  ungroup()
+```
+
+```{r}
+ggplot(top_sentiment_bigrams,
+       aes(x = reorder(bigram, n), y = n, fill = sentiment)) +
+  geom_col(show.legend = TRUE) +
+  coord_flip() +
+  facet_wrap(
+    ~ voted_up,
+    labeller = as_labeller(c(
+      `TRUE` = "Positive Reviews",
+      `FALSE` = "Negative Reviews"
+    ))
+  ) +
+  labs(
+    title = "Most Frequent Sentiment Bigrams by Review Type",
+    x = "Bigram",
+    y = "Frequency",
+    fill = "Sentiment"
+  ) +
+  theme_minimal(base_size = 14)
+```
+
+```{r}
+library(ggplot2)
+library(dplyr)
+
+# Bin playtime (in hours)
+df_en <- df_en %>%
+  mutate(playtime_hours = playtime_at_review / 60,
+         playtime_bin = cut(playtime_hours,
+                            breaks = c(0, 5, 10, 20, 40, 80, 160, 320, 640, 1280, Inf),
+                            labels = c("0-5", "5-10", "10-20", "20-40", "40-80", 
+                                       "80-160", "160-320", "320-640", "640-1280", "1280+"),
+                            include.lowest = TRUE))
+
+# Aggregate for plotting
+df_bin_summary <- df_en %>%
+  group_by(playtime_bin, voted_up) %>%
+  summarise(
+    avg_playtime = mean(playtime_hours),
+    n_reviews = n(),
+    .groups = "drop"
+  )
+
+# Plot
+ggplot(df_bin_summary, aes(x = playtime_bin, y = avg_playtime, fill = voted_up)) +
+  geom_col(position = "dodge") +
+  geom_text(aes(label = n_reviews), position = position_dodge(width = 0.9), vjust = -0.5) +
+  scale_fill_manual(values = c("red", "forestgreen"), labels = c("Negative", "Positive")) +
+  labs(
+    title = "Average Playtime and Number of Reviews by Review Type",
+    x = "Playtime Bin (hours)",
+    y = "Average Playtime (hours)",
+    fill = "Review Type"
+  ) +
+  theme_minimal(base_size = 14) +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+
+```
+
+# Analysis 1: Relationship Between Perceived Difficulty and Player Experience
+
+Observation from Playtime vs Review Type:
+
+Most reviews are positive, confirming the general community satisfaction.
+
+Negative reviews tend to increase with playtime until ~40 hours, then drop sharply.
+
+After 160 hours, no negative reviews exist, which makes sense: players who dislike the game don’t stick around.
+
+This suggests that difficulty spikes (early bosses or mechanics) may trigger early negative sentiment, but experienced players either adapt or enjoy the challenge.
+
+Plot Support:
+
+Playtime bins show where negative reviews cluster.
+
+Average playtime of reviewers with negative reviews is lower than for positives beyond the early game.
+
+Insight:
+
+Hollow Knight: Silksong's difficulty is enough to challenge new players, but players who persevere past the ~40-hour mark overwhelmingly enjoy it.
+
+Early-game difficulty is the main friction point.
+
+# Analysis 2: Sentiment vs Review Content
+
+Observation from Bigram Sentiment Analysis:
+
+"Savage beastfly" is the second most frequent bigram after the game title.
+
+Despite its negative connotation (hard enemy), it appears more in positive reviews, suggesting players value its challenging nature.
+
+This indicates a community that celebrates difficulty as a rewarding feature rather than a negative point.
+
+Plot Support:
+
+The sentiment bigram plot shows “savage beastfly” in the positive review facet.
+
+Frequency aligns with challenge discussion across reviews.
+
+Insight:
+
+Difficulty-related content can generate positive engagement if the player base enjoys mastering challenges.
+
+This reinforces the trend seen in playtime: challenges cause temporary negative sentiment but are ultimately part of the rewarding experience.
+
+
+# Analysis 3: Gameplay Mechanics Associated with Positive Reviews
+
+Observations from Bigram & Sentiment Analysis:
+
+Challenge-related terms:
+
+"savage beastfly", "double damage", "flying enemies", "contact damage" appear frequently.
+
+"dark souls" shows up, emphasizing the game’s reputation for high difficulty.
+
+Sentiment nuance:
+
+Even tough enemies (“savage beastfly”) often appear in positive reviews, suggesting players enjoy the challenge.
+
+Phrases like "hate savage" appear in negative reviews, highlighting frustration at early difficulty spikes.
+
+Damage & health mechanics:
+
+Players repeatedly comment on double damage and low health pool (start with 5 masks), which makes mistakes punishing early on.
+
+Positive reviews still reference these, showing that mastering these mechanics is satisfying.
+
+Insights:
+
+Difficulty is a core part of engagement: the game punishes mistakes, but players who enjoy mastering mechanics write positive reviews.
+
+Flying enemies & contact damage are key friction points for new players but contribute to rewarding skill expression for experienced players.
+
+Positive feedback often frames difficulty as fun, while negative feedback peaks when players feel overwhelmed (e.g., before reaching 7 masks).
+
+Plot Support:
+
+Bigram frequency plots can highlight these mechanics:
+
+Compare positive vs negative reviews for "double damage", "savage beastfly", "flying enemies".
+
+Could use a stacked bar plot: x-axis = bigram, y-axis = count, fill = review type.
+
+
+
+```{r}
+
+# Define challenge-related bigrams
+
+challenge_bigrams <- c("savage beastfly", "double damage", "flying enemies",
+"contact damage", "dark souls")
+
+# Create bigrams while keeping review & playtime info
+
+df_bigrams_with_review <- df_text %>%
+select(review, voted_up, playtime_at_review) %>%  # keep playtime
+mutate(playtime_hours = playtime_at_review / 60) %>%  # convert to hours
+unnest_tokens(bigram, review, token = "ngrams", n = 2) %>%
+separate(bigram, into = c("word1", "word2"), sep = " ") %>%
+filter(!word1 %in% stop_words$word, !word2 %in% stop_words$word) %>%
+unite(bigram, word1, word2, sep = " ")
+
+# Summarize challenge bigrams with count and avg playtime
+
+bigrams_challenge_playtime <- df_bigrams_with_review %>%
+filter(bigram %in% challenge_bigrams) %>%
+group_by(bigram, voted_up) %>%
+summarise(
+count = n(),
+avg_playtime = mean(playtime_hours, na.rm = TRUE),
+.groups = "drop"
+) %>%
+mutate(voted_up = ifelse(voted_up, "Positive Reviews", "Negative Reviews"))
+
+# Plot: bars for frequency, points for average playtime
+
+ggplot(bigrams_challenge_playtime,
+aes(x = reorder(bigram, count), y = count, fill = voted_up)) +
+geom_col(position = "dodge") +
+geom_point(aes(y = avg_playtime, color = "Avg Playtime"),
+size = 4, position = position_dodge(width = 0.9)) +
+coord_flip() +
+scale_fill_manual(values = c("Positive Reviews" = "forestgreen",
+"Negative Reviews" = "firebrick")) +
+scale_color_manual(values = c("Avg Playtime" = "dodgerblue")) +
+labs(
+title = "Challenge-Related Bigrams: Frequency and Average Playtime",
+x = "Bigram",
+y = "Frequency / Avg Playtime (hours)",
+fill = "Review Type",
+color = ""
+) +
+theme_minimal(base_size = 14)
+```
+
+# Disscussion 
+
+## Player Sentiment and Difficulty
+
+Early-game difficulty spikes trigger initial negative sentiment, but players who persist tend to adapt and enjoy mastering mechanics.
+
+Negative reviews cluster around ~40 hours of playtime, showing that frustration is temporary and tied to skill acquisition.
+
+After ~160 hours, negative reviews drop to zero — players either “git gud” or stop playing, which is exactly how the game maintains its tension and engagement.
+
+## Gameplay Mechanics
+
+Challenge-related mechanics such as “savage beastfly”, double damage, flying enemies, and references to Dark Souls show up in both positive and negative reviews.
+
+Even tough enemies are frequently mentioned in positive reviews, indicating that difficulty itself is part of the fun.
+
+Players recognize that punishing mechanics reward skill mastery, making failure feel meaningful rather than frustrating.
+
+## Community Engagement
+
+Players celebrating difficult encounters, like beating a hard enemy, often write positive reviews, reinforcing a culture of overcoming challenges.
+
+Sentiment analysis shows that frustration exists but is largely contextual — tied to specific mechanics rather than the game overall.
+
+## Overall Insight
+
+Silksong designs difficulty to be consistent and meaningful, giving players a clear risk-reward loop: succeed by improving, or fail and learn.
+
+This reinforces the notion that skillful play and perseverance are core to player enjoyment, and the game’s challenge is intentionally central to engagement.
+
+#  Conclusion
+
+Hollow Knight: Silksong achieves high player satisfaction, with overwhelmingly positive reviews overall.
+
+Difficulty is consistent throughout the game — it doesn’t plateau. Players either adapt and overcome or struggle, making failure meaningful.
+
+Challenge-related mechanics like “savage beastfly”, double damage, and flying enemies are central to both criticism and praise, showing that players engage deeply with skill-based obstacles.
+
+Player experience evolves with playtime: early frustration turns into mastery, reinforcing the rewarding nature of the game’s mechanics.
+
+Overall, the game’s “git gud or lose” design ensures that difficulty is fun, skill expression is meaningful, and long-term engagement is driven by challenge rather than grind.
 
 
