@@ -5,7 +5,7 @@ html:
       toc: true
       theme: cosmo
 webr:
-  packages: ['ggplot2', 'dplyr', 'effsize']
+  packages: ['ggplot2', 'dplyr', 'effsize','tidyverse','tidytext','lubridate']
 execute:
   echo: true
   warning: false
@@ -72,7 +72,7 @@ colnames(df)
 
 To ensure consistency in text analysis, only English-language reviews are retained.
 
-```webr-r
+```{r}
 df_en <- df %>%
 filter(language == "english")
 
@@ -160,37 +160,69 @@ df_text <- df_en %>%
     review = str_replace_all(review, "[^a-z\\s]", "")
   )
 ```
-## 13. Perceived Difficulty and Player Experience
+## 13. Perceived Difficulty and Player Experience - Detailed 
+
+### Step 1: Preprocessing 
+```{r}
+
+# Tokenize into words
+df_tokens <- df_text %>%
+  unnest_tokens(word, review) %>%
+  filter(!word %in% stop_words$word)  # remove common English words
+
+
+```
+
+### Step 2: Count Words in All Reviews
+Get the most frequent words overall:
+```{r}
+word_counts <- df_tokens %>%
+  count(word, sort = TRUE)
+
+word_counts %>% slice(1:20)  # top 20 words
+```
+
+#### n-grams 
 
 ```{r}
-difficulty_keywords <- c(
-  "hard", "difficult", "challenging",
-  "punishing", "brutal", "unfair"
-)
+stop_words_list <- stop_words$word
 
-df_text <- df_text %>%
-  mutate(
-    mentions_difficulty = str_detect(
-      review,
-      str_c(difficulty_keywords, collapse = "|")
-    )
-  )
+  df_bigrams_clean <- df_bigrams %>%
+  separate(bigram, into = c("word1", "word2"), sep = " ") %>%
+  filter(!word1 %in% stop_words_list, !word2 %in% stop_words_list) %>%
+  unite(bigram, word1, word2, sep = " ")
 
 
-df_text %>%
-  group_by(mentions_difficulty) %>%
-  summarise(
-    mean_playtime = mean(playtime_at_review),
-    median_playtime = median(playtime_at_review),
-    n = n()
-  )
+  bigram_counts <- df_bigrams_clean %>%
+  count(bigram, sort = TRUE)
+
+  bigram_counts %>% slice(1:20)
 
 
-wilcox.test(
-  playtime_at_review ~ mentions_difficulty,
-  data = df_text
-)
+```
 
+```{r}
+# Remove literal "NA NA" bigrams
+top_bigrams <- bigram_counts %>%
+  filter(bigram != "NA NA") %>%   # remove bad bigrams
+  slice(1:20)
+
+top_bigrams <- bigram_counts %>%
+  filter(!str_detect(bigram, "^([a-z]+) \\1$")) %>%  # remove repeated words
+  filter(bigram != "NA NA") %>%
+  slice(1:20)
+
+
+# Plot
+ggplot(top_bigrams, aes(x = reorder(bigram, n), y = n)) +
+  geom_col(fill = "steelblue") +
+  coord_flip() +
+  labs(
+    title = "Top 20 Most Common Bigrams in English Reviews",
+    x = "Bigram",
+    y = "Frequency"
+  ) +
+  theme_minimal(base_size = 14)
 
 ```
 
