@@ -4,6 +4,9 @@ author: "Med Yassine ELWERDANI"
 html: 
       toc: true
       theme: cosmo
+format: 
+  revealjs:
+    scrollable: true
 webr:
   packages: ['ggplot2', 'dplyr', 'effsize','tidyverse','tidytext','lubridate']
 execute:
