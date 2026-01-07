@@ -1,0 +1,198 @@
+---
+title: "Player Perception and Engagement in Hollow Knight: Silksong"
+author: "Med Yassine ELWERDANI"
+html: 
+      toc: true
+      theme: cosmo
+webr:
+  packages: ['ggplot2', 'dplyr', 'effsize']
+execute:
+  echo: true
+  warning: false
+  message: false
+---
+
+## 1. Introduction
+
+This project analyzes player perception and engagement in *Hollow Knight: Silksong* using Steam user reviews.
+The analysis focuses on how player experience and reviewer behavior relate to perceived difficulty, sentiment consistency,
+gameplay mechanics appreciation, and community feedback.
+
+Only English-language reviews are considered to ensure consistency in text-based analysis.
+
+## 2. Data Source
+
+The dataset consists of publicly available Steam reviews collected using a third-party tool interfacing with Steam review data.
+Each observation represents a single user review and includes playtime information, recommendation status, and community feedback metrics.
+
+No private or personally identifiable information is used.
+
+## 3. Libraries
+
+```{r}
+library(tidyverse)
+library(lubridate)
+library(tidytext)
+```
+
+## 4. Data Loading
+
+```{r}
+df_raw <- read_csv(
+"silksong_reviews.csv",
+show_col_types = FALSE
+)
+
+dim(df_raw)
+```
+
+The raw dataset contains approximately 37,000 reviews with 22 variables.
+
+## Column Renaming
+
+Some variables use slash-separated names that complicate manipulation in R.
+These columns are renamed once to improve readability and maintainability.
+
+```{r}
+df <- df_raw %>%
+rename(
+author_steamid = `author/steamid`,
+playtime_at_review = `author/playtime_at_review`,
+playtime_forever = `author/playtime_forever`,
+playtime_last_two_weeks = `author/playtime_last_two_weeks`,
+num_games_owned = `author/num_games_owned`,
+num_reviews = `author/num_reviews`,
+last_played = `author/last_played`
+)
+
+colnames(df)
+```
+
+## 6. Language Filtering
+
+To ensure consistency in text analysis, only English-language reviews are retained.
+
+```webr-r
+df_en <- df %>%
+filter(language == "english")
+
+nrow(df_en)
+```
+
+After filtering, the dataset contains 13,580 English-language reviews.
+
+## 7. Timestamp and Playtime Cleaning
+
+Unix timestamps are converted to date-time format.
+Missing playtime values are replaced with zero.
+
+```{r}
+df_en <- df_en %>%
+mutate(
+timestamp_created = as_datetime(timestamp_created),
+timestamp_updated = as_datetime(timestamp_updated),
+last_played = as_datetime(last_played),
+
+
+playtime_at_review = replace_na(playtime_at_review, 0),
+playtime_forever = replace_na(playtime_forever, 0),
+playtime_last_two_weeks = replace_na(playtime_last_two_weeks, 0)
+
+)
+```
+
+## 8. Exploratory Playtime Summary
+```{r}
+summary(df_en$playtime_at_review)
+```
+
+The distribution of playtime at review is right-skewed, with a small number of very high-playtime users.
+
+## 9. Column Selection for Analysis
+
+Only variables relevant to the research objectives are retained.
+
+```{r}
+df_en <- df_en %>%
+select(
+review,
+voted_up,
+playtime_at_review,
+playtime_forever,
+playtime_last_two_weeks,
+num_games_owned,
+num_reviews,
+votes_up,
+votes_funny,
+weighted_vote_score,
+steam_purchase,
+received_for_free,
+written_during_early_access,
+timestamp_created
+)
+
+glimpse(df_en)
+```
+
+At this stage, the dataset is fully cleaned and structured for analysis.
+
+## 10. Planned Analyses
+
+The following analyses will be conducted:
+
+1. Relationship between perceived difficulty and player experience.
+2. Consistency between textual sentiment and recommendation outcome.
+3. Identification of gameplay mechanics associated with positive reviews.
+4. Effect of reviewer experience on community feedback.
+
+## 11. Current Status
+
+The dataset is cleaned, restricted to English-language reviews, normalized for playtime,
+and ready for text-based and statistical analysis.
+
+
+## 12. Text Preprocessing
+
+```{r}
+df_text <- df_en %>%
+  mutate(
+    review = str_to_lower(review),
+    review = str_replace_all(review, "[^a-z\\s]", "")
+  )
+```
+## 13. Perceived Difficulty and Player Experience
+
+```{r}
+difficulty_keywords <- c(
+  "hard", "difficult", "challenging",
+  "punishing", "brutal", "unfair"
+)
+
+df_text <- df_text %>%
+  mutate(
+    mentions_difficulty = str_detect(
+      review,
+      str_c(difficulty_keywords, collapse = "|")
+    )
+  )
+
+
+df_text %>%
+  group_by(mentions_difficulty) %>%
+  summarise(
+    mean_playtime = mean(playtime_at_review),
+    median_playtime = median(playtime_at_review),
+    n = n()
+  )
+
+
+wilcox.test(
+  playtime_at_review ~ mentions_difficulty,
+  data = df_text
+)
+
+
+```
+
+
+
